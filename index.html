@@ -111,17 +111,7 @@ dialog .actions{justify-content:flex-end}
 </head>
 <body>
 <main>
-<header><div class="brand">🐷 Pomoz mi s diplomkou</div><div class="header-actions"><div class="date" id="date"></div><button type="button" id="open-reset" class="secondary reset-button" hidden>Reset hry</button></div></header>
-<dialog id="reset-dialog" aria-labelledby="reset-title" aria-describedby="reset-description">
-<form id="reset-form" method="dialog">
-<h2 id="reset-title">Resetovat celou hru?</h2>
-<p id="reset-description">Smažeš pokrok, sérii, výhry a nastavení v tomto prohlížeči. Hra začne od dneška znovu.</p>
-<div class="actions">
-<button class="secondary" value="cancel" autofocus>Zrušit</button>
-<button class="reset-confirm" value="reset">Ano, resetovat</button>
-</div>
-</form>
-</dialog>
+<header><div class="brand">🐷 Pomoz mi s diplomkou</div><div class="header-actions"><div class="date" id="date"></div></div></header><p id="network-status" class="muted" role="status" style="padding-block:10px"></p>
 <dialog id="timer-reset-dialog" aria-labelledby="timer-reset-title" aria-describedby="timer-reset-description">
 <form id="timer-reset-form" method="dialog">
 <h2 id="timer-reset-title">Resetovat časovač?</h2>
@@ -161,26 +151,10 @@ dialog .actions{justify-content:flex-end}
 <p>Bonusové bloky jsou dobrovolné. Denní úkol má nejvýš dva bloky včetně bonusu. S Pomodorem můžeš psát dál a zapsat si čas navíc. Pokud bonusový blok nedokončíš do půlnoci pražského času, bonus propadne.</p>
 <p>Za první vynechaný den je pokuta 50 Kč, za druhý v řadě 100 Kč a za třetí 150 Kč. Peníze a výhry si předáváte sami.</p>
 </details>
-<details>
-<summary>Sdílení pokroku</summary>
-<div class="controls">
-<button id="export-progress">Stáhnout pokrok</button>
-<label>Nahrát změny od Ženi<input id="import-settings" type="file" accept=".json,application/json"></label>
-</div>
-<p id="player-status" role="status"></p>
-</details>
 </div>
 <div id="owner" hidden>
 <h1>Panel pro Žeňu</h1>
 <p class="muted">Kalendář, výhry a ruční započítávání dnů.</p>
-<section class="card">
-<h2>Sdílení s hráčem</h2>
-<div class="controls">
-<label>Nahrát hráčův pokrok<input id="import-progress" type="file" accept=".json,application/json"></label>
-<button id="export-settings">Stáhnout změny pro hráče</button>
-</div>
-<p id="owner-status" role="status"></p>
-</section>
 <section class="card">
 <h2>Kalendář</h2>
 <p id="owner-stats"></p>
@@ -229,7 +203,6 @@ dialog .actions{justify-content:flex-end}
 </div>
 </main>
 <script>
-const key = 'porosenok-pishet-v1';
 const byId = id => document.getElementById(id);
 const dateFormat = new Intl.DateTimeFormat('sv-SE', {timeZone:'Europe/Prague',year:'numeric',month:'2-digit',day:'2-digit'});
 const dayIndex = date => Date.parse(date + 'T00:00:00Z') / 86400000;
@@ -257,16 +230,12 @@ const baseRewards = [
   {icon:'🫥',name:'Prázdná krabička',weight:14,mode:'empty'}
 ];
 const fresh = () => ({start:today(), days:{}, prizes:[], paid:0});
-function load() {
-  try { return JSON.parse(localStorage.getItem(key)) || fresh(); }
-  catch { return fresh(); }
-}
-let state = load();
+let state = fresh();
 let renderedDay;
-const ownerMode = () => location.hash === '#zhenya';
+const ownerMode = () => onlineRole === 'owner';
 const rewardList = () => [...baseRewards,...(state.customRewards || [])];
 const escape = value => String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[char]);
-const save = () => localStorage.setItem(key, JSON.stringify(state));
+const save = () => saveOnline();
 const current = () => state.days[today()];
 const completed = day => !!day?.sessions?.slice(0,day.required).every(session => session.reward !== undefined);
 const makeSession = minutes => ({minutes,left:minutes*60_000,end:null});
@@ -370,7 +339,6 @@ byId('pomodoro').addEventListener('submit',event=>{
   if (event.target.id !== 'custom-pomodoro') return;
   event.preventDefault();
   const minutes = Number(new FormData(event.target).get('minutes'));
-  state = load();
   startPomodoro(current(),minutes);
   save();
   render();
@@ -521,9 +489,8 @@ function render() {
   const editsApplied = applyDayEdits();
   if (migrateStickers() || editsApplied || daysReset) save();
   renderedDay = today();
-  byId('player').hidden = ownerMode();
-  byId('owner').hidden = !ownerMode();
-  byId('open-reset').hidden = !ownerMode();
+  byId('player').hidden = !connected || ownerMode();
+  byId('owner').hidden = !connected || !ownerMode();
   if (ownerMode()) renderOwner();
   byId('date').textContent = new Intl.DateTimeFormat('cs-CZ',{timeZone:'Europe/Prague',day:'numeric',month:'long'}).format(new Date());
   const day = current();
@@ -571,7 +538,7 @@ function applyDayEdits() {
   return changed;
 }
 
-function openBox(day,session,rolled) {
+function openBox(day,session,rolled,secretReward) {
   if (session.bonus) {
     const prize = state.prizes.find(item=>item.id === session.bonus.prize);
     const reward = rewardList()[session.bonus.reward];
@@ -582,7 +549,7 @@ function openBox(day,session,rolled) {
     day.last = prize.name;
     return;
   }
-  const picked = state.dayEdits?.[today()]?.reward;
+  const picked = secretReward;
   const hasSecretReward = picked !== undefined && day.appliedReward !== picked;
   session.reward = hasSecretReward ? picked : rolled;
   if (hasSecretReward) day.appliedReward = picked;
@@ -606,7 +573,6 @@ function openBox(day,session,rolled) {
 document.addEventListener('click',event=>{
   const clicked = event.target.closest('button[data-action]');
   if (!clicked) return;
-  state = load();
   if (renderedDay !== today()) return render();
   const [command,id] = clicked.dataset.action.split(':');
   const day = current();
@@ -641,7 +607,8 @@ document.addEventListener('click',event=>{
   }
   if (command === 'open' && active && remaining(active) === 0) {
     const selected = active.boxChoices?.[id];
-    if (active.bonus || Number.isInteger(selected)) openBox(day,active,selected);
+    if (active.bonus) openBox(day,active,selected);
+    else if (Number.isInteger(selected)) { void openOnlineBox(id); return; }
   }
   if (command === 'skip' && day?.offer) delete day.offer;
   if (command === 'bonus' && day?.offer) {
@@ -683,7 +650,6 @@ byId('add-sticker').addEventListener('submit',event=>{
   const reader = new FileReader();
   reader.onerror = () => { status.textContent = 'Soubor se nepodařilo načíst.'; };
   reader.onload = () => {
-    state = load();
     const id = 'custom-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
     const stickers = [...(state.customStickers || []),{id,name,src:reader.result}];
     if (!validCustomStickers(stickers)) {
@@ -697,8 +663,7 @@ byId('add-sticker').addEventListener('submit',event=>{
       render();
       status.textContent = 'Samolepka byla přidána do losování.';
     } catch {
-      state = load();
-      status.textContent = 'Prohlížeč nemohl uložit samolepku.';
+        status.textContent = 'Prohlížeč nemohl uložit samolepku.';
     }
   };
   reader.readAsDataURL(file);
@@ -793,7 +758,6 @@ byId('calendar').addEventListener('click',event=>{
 byId('edit-day').addEventListener('submit',event=>{
   event.preventDefault();
   if (!ownerMode()) return;
-  state = load();
   state.overrides ??= {};
   state.dayEdits ??= {};
   const edit = {...state.dayEdits[selectedDate]};
@@ -816,7 +780,7 @@ byId('edit-day').addEventListener('submit',event=>{
   }
   if (Object.keys(edit).length) state.dayEdits[selectedDate] = edit;
   else delete state.dayEdits[selectedDate];
-  if (!validDayEdits(state.dayEdits,rewardList().length)) { state = load(); return; }
+  if (!validDayEdits(state.dayEdits,rewardList().length)) return;
   applyDayEdits();
   save();
   render();
@@ -840,7 +804,6 @@ function renderOwner() {
 byId('new-reward').addEventListener('submit',event=>{
   event.preventDefault();
   if (!ownerMode()) return;
-  state = load();
   const data = new FormData(event.target);
   const reward = {name:String(data.get('reward')).trim(),weight:Number(data.get('weight')),icon:'🎟️',mode:'save'};
   if (!validReward(reward)) return;
@@ -871,29 +834,9 @@ function settings() {
   return {customStickers:state.customStickers || [],customRewards:state.customRewards || [],overrides:state.overrides || {},dayEdits:state.dayEdits || {},dayResets:state.dayResets || {}};
 }
 
-function download(kind,data) {
-  const href = URL.createObjectURL(new Blob([JSON.stringify({kind,data})],{type:'application/json'}));
-  const link = document.createElement('a');
-  link.href = href;
-  link.download = 'porosenok-'+kind+'.json';
-  link.click();
-  setTimeout(()=>URL.revokeObjectURL(href),30_000);
-}
-
-byId('export-progress').onclick = () => download('progress',load());
-byId('export-settings').onclick = () => {
-  state = load();
-  download('settings',settings());
-};
-
-function compatibleRewards(first,second) {
-  return first.slice(0,Math.min(first.length,second.length)).every((reward,index)=>
-    reward.name === second[index].name && reward.weight === second[index].weight);
-}
-
-function validProgress(data) {
+function validProgress(data,customRewards) {
   if (!isDate(data?.start) || data.start > today() || !data.days || !Array.isArray(data.prizes)) return false;
-  const limit = baseRewards.length+(data.customRewards?.length || 0);
+  const limit = baseRewards.length+(customRewards?.length || 0);
   return Object.entries(data.days).every(([date,day])=>isDate(date) && [1,2].includes(day?.required) &&
     Array.isArray(day.sessions) && day.sessions.length >= day.required && day.sessions.length <= 2 &&
     (day.pomodoros === undefined || Array.isArray(day.pomodoros) && day.pomodoros.every(session=>
@@ -909,65 +852,6 @@ function validProgress(data) {
     data.prizes.every(prize=>prize && typeof prize.name === 'string' && /^[\d-]+$/.test(prize.id) && isDate(prize.until));
 }
 
-function importFile(input,kind,status) {
-  input.addEventListener('change',async()=>{
-    const file = input.files[0];
-    if (!file) return;
-    try {
-      if (file.size > 4_000_000) throw new Error('Soubor je příliš velký.');
-      const {kind:type,data} = JSON.parse(await file.text());
-      if (type !== kind) throw new Error('Vybraný soubor má jiný typ.');
-      state = load();
-      const local = settings();
-      const incoming = {customStickers:data.customStickers ?? [],customRewards:data.customRewards ?? [],overrides:data.overrides ?? {},dayEdits:data.dayEdits ?? {},dayResets:data.dayResets ?? {}};
-      if (!validSettings(incoming) || !compatibleRewards(local.customRewards,incoming.customRewards)) {
-        throw new Error('Seznamy odměn se liší. Použij nejnovější soubor.');
-      }
-      if (!validCustomStickers(incoming.customStickers)) throw new Error('Samolepky se nepodařilo načíst.');
-      const stickerMap = new Map([...incoming.customStickers,...local.customStickers].map(item=>[item.id,item]));
-      const customStickers = [...stickerMap.values()];
-      if (!validCustomStickers(customStickers)) throw new Error('Seznam samolepek je příliš velký.');
-      const customRewards = local.customRewards.length > incoming.customRewards.length ? local.customRewards : incoming.customRewards;
-      if (!validDayEdits(incoming.dayEdits,baseRewards.length+customRewards.length) ||
-          !validResetDates(incoming.dayResets) || !validResetDates(data.appliedDayResets ?? {})) {
-        throw new Error('Úpravy kalendáře nejsou platné.');
-      }
-      const dayResets = {...local.dayResets};
-      for (const [date,stamp] of Object.entries(incoming.dayResets)) {
-        dayResets[date] = Math.max(stamp,dayResets[date] || 0);
-      }
-      if (kind === 'progress') {
-        for (const [date,stamp] of Object.entries(local.dayResets)) {
-          if (stamp <= (data.appliedDayResets?.[date] || 0)) continue;
-          delete incoming.overrides[date];
-          delete incoming.dayEdits[date];
-        }
-        if (!validProgress(data)) throw new Error('Pokrok se nepodařilo načíst.');
-        state = {...data,customRewards,customStickers,dayResets,overrides:state.ownerImported ? local.overrides : {...incoming.overrides,...local.overrides},dayEdits:state.ownerImported ? local.dayEdits : {...incoming.dayEdits,...local.dayEdits},ownerImported:true};
-      } else {
-        for (const [date,stamp] of Object.entries(local.dayResets)) {
-          if (stamp <= (incoming.dayResets[date] || 0)) continue;
-          for (const field of ['overrides','dayEdits']) {
-            if (local[field][date] === undefined) delete incoming[field][date];
-            else incoming[field][date] = local[field][date];
-          }
-        }
-        state = {...state,customRewards,customStickers,dayResets,overrides:incoming.overrides,dayEdits:incoming.dayEdits};
-      }
-      save();
-      render();
-      status.textContent = kind === 'progress' ? 'Pokrok byl načten.' : 'Změny od Ženi byly načteny.';
-    } catch(error) {
-      state = load();
-      status.textContent = error.message || 'Soubor se nepodařilo načíst.';
-    } finally {
-      input.value = '';
-    }
-  });
-}
-
-importFile(byId('import-progress'),'progress',byId('owner-status'));
-importFile(byId('import-settings'),'settings',byId('player-status'));
 function validResetDates(entries) {
   return entries && typeof entries === 'object' && !Array.isArray(entries) &&
     Object.entries(entries).every(([date,stamp])=>isDate(date) && Number.isSafeInteger(stamp) && stamp > 0);
@@ -996,7 +880,6 @@ byId('open-day-reset').onclick = () => {
 
 byId('day-reset-form').addEventListener('submit',event=>{
   if (!ownerMode() || event.submitter?.value !== 'reset' || !isDate(dayResetTarget)) return;
-  state = load();
   const date = dayResetTarget;
   if (date < state.start) return;
   if (state.dayEdits) delete state.dayEdits[date];
@@ -1016,7 +899,6 @@ function openTimerReset(day,session) {
 
 byId('timer-reset-form').addEventListener('submit',event=>{
   if (event.submitter?.value !== 'reset') return;
-  state = load();
   const day = current();
   const session = day?.sessions.find(item=>item.reward === undefined);
   if (!session || !timerResetTarget || timerResetTarget.date !== today() ||
@@ -1027,31 +909,158 @@ byId('timer-reset-form').addEventListener('submit',event=>{
   render();
 });
 
-byId('open-reset').onclick = () => {
-  if (!ownerMode()) return;
-  const dialog = byId('reset-dialog');
-  dialog.returnValue = '';
-  dialog.showModal();
-};
-byId('reset-form').addEventListener('submit',event=>{
-  if (!ownerMode() || event.submitter?.value !== 'reset') return;
-  state = fresh();
-  selectedDate = today();
-  calendarMonth = selectedDate.slice(0,7)+'-01';
-  for (const id of ['upload-status','player-status','owner-status','day-status']) byId(id).textContent = '';
-  save();
-  render();
-});
-window.addEventListener('hashchange',render);
+const tokenMatch = location.hash.match(/^#(play|zhenya)=([a-f0-9-]{72})$/i);
+const onlineToken = tokenMatch?.[2];
+const onlineRole = tokenMatch?.[1] === 'zhenya' ? 'owner' : 'player';
+const projectEndpoint = 'https://pjqyminaemllwarvvkrw.supabase.co/rest/v1/rpc/pomodoro_online';
+const publicKey = 'sb_publishable_ua3J5YEQtRRA2YVp-8sUzg_8y5kIfVZ';
+let remoteVersion;
+let lastSavedPayload;
+let pendingPayload;
+let busy = false;
+let connected = false;
+let remoteSettings = {};
+let retryBlocked = false;
 
-window.addEventListener('storage',event=>{
-  if (event.key !== key) return;
-  state = load();
+function setConnection(message) {
+  byId('network-status').textContent = message;
+}
+
+async function syncRequest(operation,payload) {
+  const result = await fetch(projectEndpoint,{
+    method:'POST',
+    headers:{apikey:publicKey,'Content-Type':'application/json'},
+    body:JSON.stringify({access_token:onlineToken,operation,payload,known_version:remoteVersion}),
+    signal:AbortSignal.timeout(12000)
+  });
+  if (!result.ok) throw new Error('HTTP '+result.status);
+  return result.json();
+}
+
+function playerSnapshot() {
+  const {start,days,prizes,paid,appliedDayResets,sticker} = state;
+  return {start,days,prizes,paid,appliedDayResets,sticker};
+}
+
+function installRemote(data) {
+  if (Object.keys(data.progress).length && !validProgress(data.progress,data.settings.customRewards)) {
+    throw new Error('Invalid progress');
+  }
+  remoteVersion = data.version;
+  remoteSettings = data.settings;
+  state = {...fresh(),...data.progress,...data.settings};
+  byId('player').inert = false;
+  byId('owner').inert = false;
+  lastSavedPayload = remotePayload();
+  connected = true;
   render();
-});
+}
+
+function canonicalPayload(value) {
+  return JSON.stringify(value,(_,item)=>item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])) : item);
+}
+
+function remotePayload() {
+  return canonicalPayload(ownerMode() ? settings() : playerSnapshot());
+}
+
+function saveOnline() {
+  if (!connected) return;
+  pendingPayload = remotePayload();
+  if (!busy) void syncOnline();
+}
+
+async function syncOnline() {
+  if (!onlineToken || busy || retryBlocked) return;
+  busy = true;
+  try {
+    if (connected && pendingPayload !== undefined && pendingPayload !== lastSavedPayload) {
+      const sending = pendingPayload;
+      const data = await syncRequest('save',JSON.parse(sending));
+      if (data.conflict) {
+        const remote = canonicalPayload(ownerMode() ? {
+          customStickers:data.settings.customStickers || [],customRewards:data.settings.customRewards || [],
+          overrides:data.settings.overrides || {},dayEdits:data.settings.dayEdits || {},dayResets:data.settings.dayResets || {}
+        } : playerFields(data.progress));
+        if (remote === lastSavedPayload) {
+          remoteVersion = data.version;
+          remoteSettings = data.settings;
+          return;
+        }
+        retryBlocked = true;
+        setConnection('Změny z jiného zařízení. Obnov stránku a zkus to znovu.');
+        byId('player').inert = true;
+        byId('owner').inert = true;
+        return;
+      }
+      remoteVersion = data.version;
+      lastSavedPayload = sending;
+      if (pendingPayload === sending) pendingPayload = undefined;
+      setConnection('Uloženo online');
+      return;
+    }
+    pendingPayload = undefined;
+    const data = await syncRequest('read');
+    if (data.role !== onlineRole) throw new Error('Role');
+    if (pendingPayload !== undefined) return;
+    const needsRefresh = !connected || data.version !== remoteVersion ||
+      JSON.stringify(data.settings) !== JSON.stringify(remoteSettings);
+    const editing = document.activeElement?.matches('#owner input, #owner select, #owner textarea') ||
+      document.querySelector('dialog[open]');
+    if (needsRefresh && (!connected || !editing)) {
+      installRemote(data);
+    }
+    setConnection('Připojeno · pokrok se ukládá online');
+  } catch {
+    setConnection(connected ? 'Připojení se přerušilo. Zkouším znovu…' :
+      'Připojení se nezdařilo. Zkontroluj odkaz a nastavení Supabase.');
+  } finally {
+    busy = false;
+  }
+}
+
+function playerFields(progress) {
+  const {start,days,prizes,paid,appliedDayResets,sticker} = progress;
+  if (!start) return lastSavedPayload === undefined ? {} : JSON.parse(lastSavedPayload);
+  return {start,days,prizes,paid,appliedDayResets,sticker};
+}
+
+async function openOnlineBox(choice) {
+  if (busy || !connected || retryBlocked || pendingPayload !== undefined) {
+    setConnection('Počkej, až se časovač uloží online, a zkus to znovu.');
+    return;
+  }
+  busy = true;
+  try {
+    const response = await syncRequest('box');
+    if (response.version !== remoteVersion) {
+      setConnection('Pokrok se aktualizuje. Pak zkus krabičku otevřít znovu.');
+      return;
+    }
+    const day = current();
+    const session = day?.sessions.find(item=>item.reward === undefined);
+    const rolled = session?.boxChoices?.[choice];
+    if (!session || remaining(session) !== 0 || !Number.isInteger(rolled)) return;
+    openBox(day,session,rolled,response.reward ?? undefined);
+    save();
+    render();
+  } catch {
+    setConnection('Krabičku se nepodařilo otevřít. Zkus to znovu.');
+  } finally {
+    busy = false;
+    if (pendingPayload !== undefined) void syncOnline();
+  }
+}
+
+window.addEventListener('hashchange',()=>location.reload());
 document.documentElement.style.setProperty('--sticker-sheet','url("'+stickerSheet+'")');
-save();
 render();
+setConnection(onlineToken ? 'Připojuji hru…' : 'Otevři osobní odkaz, který jsi dostal.');
+if (onlineToken) {
+  void syncOnline();
+  setInterval(syncOnline,2500);
+}
 setInterval(()=>{
   if (renderedDay !== today()) return render();
   if (ownerMode()) return;
